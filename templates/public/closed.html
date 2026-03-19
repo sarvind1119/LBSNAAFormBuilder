@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{% if course %}{{ course.name }} - Closed{% else %}Not Found{% endif %}{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto mt-20 text-center">
+    <div class="bg-white rounded-xl shadow-lg p-12">
+        <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m0 0v2m0-2h2m-2 0H10m-4.343-5.657a8 8 0 1111.314 0L12 21l-4.343-5.657z"></path>
+            </svg>
+        </div>
+        {% if course %}
+            <h1 class="text-xl font-bold text-gray-900 mb-2">{{ course.name }}</h1>
+            <p class="text-gray-500">{{ message|default('Registration for this course is currently closed.') }}</p>
+        {% else %}
+            <h1 class="text-xl font-bold text-gray-900 mb-2">Page Not Found</h1>
+            <p class="text-gray-500">{{ message|default('The page you are looking for does not exist.') }}</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

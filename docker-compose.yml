@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  lbsnaa-forms:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - ADMIN_PASSWORD=admin
+      - SECRET_KEY=dev-secret-change-this
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+      - ./temp_uploads:/app/temp_uploads
+      - ./models:/app/models:ro
+      - ./celebrity_reference:/app/celebrity_reference:ro
+    restart: unless-stopped

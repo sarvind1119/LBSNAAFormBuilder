@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - LBSNAA Admin{% endblock %}
+
+{% block nav %}
+<nav class="bg-white shadow-sm border-b">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
+        <h1 class="text-lg font-bold text-gray-900">LBSNAA Form Builder</h1>
+        <div class="flex items-center gap-4">
+            <a href="{{ url_for('admin_course_new') }}" class="bg-accent-600 hover:bg-accent-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition">
+                + New Course
+            </a>
+            <a href="{{ url_for('admin_logout') }}" class="text-gray-500 hover:text-gray-700 text-sm">Logout</a>
+        </div>
+    </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+<h2 class="text-xl font-semibold text-gray-800 mb-6">Courses</h2>
+
+{% if courses %}
+<div class="grid gap-4">
+    {% for course in courses %}
+    <div class="bg-white rounded-xl shadow-sm border p-6 flex items-center justify-between">
+        <div class="flex-1">
+            <div class="flex items-center gap-3 mb-1">
+                <h3 class="text-lg font-semibold text-gray-900">{{ course.name }}</h3>
+                {% if course.is_active %}
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
+                {% else %}
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Closed</span>
+                {% endif %}
+            </div>
+            {% if course.description %}
+                <p class="text-sm text-gray-500 mb-2">{{ course.description }}</p>
+            {% endif %}
+            <div class="flex items-center gap-4 text-sm text-gray-500">
+                <span>{{ course.submission_count }} submissions</span>
+                <span>Link: <code class="bg-gray-100 px-2 py-0.5 rounded text-xs">/form/{{ course.slug }}</code></span>
+                <span>Created: {{ course.created_at[:10] }}</span>
+            </div>
+        </div>
+        <div class="flex items-center gap-2 ml-4">
+            <a href="{{ url_for('admin_submissions', course_id=course.id) }}"
+               class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 px-3 rounded-lg transition">
+                View Submissions
+            </a>
+            <a href="{{ url_for('admin_course_edit', course_id=course.id) }}"
+               class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 px-3 rounded-lg transition">
+                Edit
+            </a>
+            <form method="POST" action="{{ url_for('admin_course_toggle', course_id=course.id) }}" class="inline">
+                <button type="submit"
+                        class="text-sm py-2 px-3 rounded-lg transition {% if course.is_active %}bg-amber-100 hover:bg-amber-200 text-amber-700{% else %}bg-green-100 hover:bg-green-200 text-green-700{% endif %}">
+                    {% if course.is_active %}Close{% else %}Activate{% endif %}
+                </button>
+            </form>
+            <form method="POST" action="{{ url_for('admin_course_delete', course_id=course.id) }}" class="inline"
+                  onsubmit="return confirm('Delete this course and ALL its submissions? This cannot be undone.')">
+                <button type="submit" class="text-sm bg-red-100 hover:bg-red-200 text-red-700 py-2 px-3 rounded-lg transition">
+                    Delete
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border p-12 text-center">
+    <p class="text-gray-500 mb-4">No courses yet.</p>
+    <a href="{{ url_for('admin_course_new') }}" class="bg-accent-600 hover:bg-accent-700 text-white font-medium py-2 px-6 rounded-lg transition">
+        Create Your First Course
+    </a>
+</div>
+{% endif %}
+{% endblock %}

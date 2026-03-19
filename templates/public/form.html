@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}{{ course.name }} - Registration{% endblock %}
+
+{% block head %}
+<style>
+    .drop-zone { transition: all 0.2s; }
+    .drop-zone.dragover { border-color: #3b82f6; background-color: #eff6ff; }
+    .validation-result { transition: all 0.3s; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+    <!-- Header -->
+    <div class="text-center mb-8">
+        <h1 class="text-2xl font-bold text-gray-900">{{ course.name }}</h1>
+        {% if course.description %}
+            <p class="text-gray-500 mt-2">{{ course.description }}</p>
+        {% endif %}
+    </div>
+
+    <!-- Success Screen (hidden by default) -->
+    <div id="successScreen" class="hidden">
+        <div class="bg-white rounded-xl shadow-lg p-12 text-center">
+            <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+            </div>
+            <h2 class="text-xl font-bold text-gray-900 mb-2">Registration Submitted!</h2>
+            <p class="text-gray-500 mb-4">Your submission ID:</p>
+            <p id="submissionId" class="text-2xl font-mono font-bold text-accent-600 mb-4"></p>
+            <p class="text-sm text-gray-400">Please save this ID for your records.</p>
+        </div>
+    </div>
+
+    <!-- Form (shown by default) -->
+    <div id="formContainer">
+        <!-- Error Banner -->
+        <div id="errorBanner" class="hidden mb-4 p-4 bg-red-100 text-red-800 border border-red-200 rounded-lg"></div>
+
+        <!-- Form Fields -->
+        <div class="bg-white rounded-xl shadow-sm border p-6 mb-6">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Personal Information</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {% for field in enabled_fields %}
+                <div class="{% if field.type == 'textarea' %}md:col-span-2{% endif %}">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">
+                        {{ field.label }}{% if field.required %} <span class="text-red-500">*</span>{% endif %}
+                    </label>
+                    {% if field.type == 'select' %}
+                        <select name="{{ field.key }}" data-field="{{ field.key }}"
+                                {% if field.required %}required{% endif %}
+                                class="form-field w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
+                            <option value="">Select...</option>
+                            {% for opt in field.get('options', []) %}
+                                <option value="{{ opt }}">{{ opt }}</option>
+                            {% endfor %}
+                        </select>
+                    {% elif field.type == 'textarea' %}
+                        <textarea name="{{ field.key }}" data-field="{{ field.key }}" rows="3"
+                                  {% if field.required %}required{% endif %}
+                                  class="form-field w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none"></textarea>
+                    {% else %}
+                        <input type="{{ field.type }}" name="{{ field.key }}" data-field="{{ field.key }}"
+                               {% if field.required %}required{% endif %}
+                               {% if field.type == 'tel' %}pattern="[0-9]{10}" maxlength="10" placeholder="10-digit number"{% endif %}
+                               class="form-field w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
+                    {% endif %}
+                    <p class="field-error text-xs text-red-600 mt-1 hidden" data-error="{{ field.key }}"></p>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Document Upload Sections -->
+        {% if enabled_docs %}
+        <div class="bg-white rounded-xl shadow-sm border p-6 mb-6">
+            <h2 class="text-lg font-medium text-gray-900 mb-4">Document Upload</h2>
+            <p class="text-sm text-gray-500 mb-4">Upload documents for AI-powered validation. Accepted formats: JPG, PNG, PDF (max 5MB).</p>
+
+            <div class="grid grid-cols-1 {% if enabled_docs|length > 1 %}md:grid-cols-{{ enabled_docs|length }}{% endif %} gap-4">
+                {% for doc in enabled_docs %}
+                <div class="doc-upload-section" data-doc-type="{{ doc.type }}">
+                    <h3 class="text-sm font-medium text-gray-700 mb-2">
+                        {{ doc.label }}{% if doc.required %} <span class="text-red-500">*</span>{% endif %}
+                    </h3>
+
+                    <!-- Drop Zone -->
+                    <div class="drop-zone border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-accent-400"
+                         data-doc-type="{{ doc.type }}">
+                        <div class="upload-prompt">
+                            <svg class="mx-auto h-10 w-10 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                            </svg>
+                            <p class="text-sm text-gray-500">Drop file here or <span class="text-accent-600 font-medium">browse</span></p>
+                        </div>
+                        <input type="file" class="hidden doc-file-input" accept=".jpg,.jpeg,.png,.pdf" data-doc-type="{{ doc.type }}">
+                    </div>
+
+                    <!-- Loading -->
+                    <div class="doc-loading hidden mt-3">
+                        <div class="flex items-center gap-2 text-sm text-gray-500">
+                            <svg class="animate-spin h-4 w-4 text-accent-600" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                            </svg>
+                            <span>Validating document...</span>
+                        </div>
+                    </div>
+
+                    <!-- Validation Result -->
+                    <div class="doc-result hidden mt-3 validation-result" data-doc-type="{{ doc.type }}">
+                        <!-- Filled by JS -->
+                    </div>
+
+                    <!-- Remove button -->
+                    <button type="button" class="doc-remove hidden mt-2 text-sm text-red-500 hover:text-red-700" data-doc-type="{{ doc.type }}">
+                        Remove &amp; re-upload
+                    </button>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Submit -->
+        <div class="flex items-center justify-between">
+            <p id="submitHint" class="text-sm text-gray-400"></p>
+            <button type="button" id="submitBtn" disabled
+                    class="bg-accent-600 hover:bg-accent-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium py-3 px-10 rounded-lg transition">
+                Submit Registration
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Pass config to JS -->
+<script>
+    const COURSE_SLUG = {{ course.slug|tojson }};
+    const ENABLED_FIELDS = {{ enabled_fields|tojson }};
+    const ENABLED_DOCS = {{ enabled_docs|tojson }};
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='form.js') }}"></script>
+{% endblock %}

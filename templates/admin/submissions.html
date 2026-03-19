@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Submissions: {{ course.name }} - LBSNAA Admin{% endblock %}
+
+{% block nav %}
+<nav class="bg-white shadow-sm border-b">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
+        <a href="{{ url_for('admin_dashboard') }}" class="text-lg font-bold text-gray-900 hover:text-accent-600">&larr; Dashboard</a>
+        <div class="flex items-center gap-4">
+            <a href="{{ url_for('admin_export_csv', course_id=course.id) }}"
+               class="bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition">
+                Export CSV
+            </a>
+            <a href="{{ url_for('admin_logout') }}" class="text-gray-500 hover:text-gray-700 text-sm">Logout</a>
+        </div>
+    </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h2 class="text-xl font-semibold text-gray-800">{{ course.name }}</h2>
+        <p class="text-sm text-gray-500">{{ submissions|length }} submission{{ 's' if submissions|length != 1 else '' }}</p>
+    </div>
+    <div class="flex items-center gap-2 text-sm">
+        <span class="text-gray-500">Form link:</span>
+        <code class="bg-gray-100 px-2 py-1 rounded text-xs font-mono">/form/{{ course.slug }}</code>
+    </div>
+</div>
+
+{% if submissions %}
+<div class="bg-white rounded-xl shadow-sm border overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">#</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitted</th>
+                    {% for field in enabled_fields %}
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{{ field.label }}</th>
+                    {% endfor %}
+                    {% for doc in enabled_docs %}
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">{{ doc.label }}</th>
+                    {% endfor %}
+                    <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for sub in submissions %}
+                <tr class="hover:bg-gray-50 cursor-pointer submission-row" data-id="{{ sub.id }}">
+                    <td class="px-4 py-3 text-sm text-gray-500">{{ loop.index }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">{{ sub.submitted_at[:16] }}</td>
+                    {% for field in enabled_fields %}
+                    <td class="px-4 py-3 text-sm text-gray-900">{{ sub.form_data.get(field.key, '') }}</td>
+                    {% endfor %}
+                    {% for doc in enabled_docs %}
+                    <td class="px-4 py-3 text-center">
+                        {% set valid_key = doc.type.lower() ~ '_valid' %}
+                        {% set val = sub.get(valid_key) %}
+                        {% if val is none %}
+                            <span class="text-gray-300">--</span>
+                        {% elif val %}
+                            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-600 text-xs font-bold" title="Accepted">&#10003;</span>
+                        {% else %}
+                            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-600 text-xs font-bold" title="Rejected">&#10007;</span>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                    <td class="px-4 py-3 text-center">
+                        <form method="POST" action="{{ url_for('admin_submission_delete', submission_id=sub.id) }}" class="inline"
+                              onsubmit="return confirm('Delete this submission?')">
+                            <button type="submit" class="text-red-400 hover:text-red-600 text-sm">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                <!-- Expandable detail row -->
+                <tr class="hidden detail-row" id="detail-{{ sub.id }}">
+                    <td colspan="{{ 3 + enabled_fields|length + enabled_docs|length }}" class="px-4 py-4 bg-gray-50">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            {% for doc in enabled_docs %}
+                            <div class="bg-white rounded-lg border p-3">
+                                <h4 class="font-medium text-gray-700 mb-2">{{ doc.label }} Details</h4>
+                                {% set result_key = doc.type.lower() ~ '_result' %}
+                                {% set result = sub.get(result_key) %}
+                                {% if result %}
+                                    <div class="space-y-1 text-xs">
+                                        <p><span class="text-gray-500">Result:</span> <span class="font-medium">{{ result.get('result', 'N/A') }}</span></p>
+                                        <p><span class="text-gray-500">Confidence:</span> {{ '%.0f' % (result.get('confidence', 0) * 100) }}%</p>
+                                        {% if result.get('name_match') %}
+                                        <p><span class="text-gray-500">Name Match:</span> {{ result.name_match.get('match_status', 'N/A') }}</p>
+                                        {% endif %}
+                                        {% if result.get('celebrity_warning') and result.celebrity_warning.get('detected') %}
+                                        <p class="text-orange-600 font-medium">Celebrity detected: {{ result.celebrity_warning.get('celebrity_name', 'Unknown') }}</p>
+                                        {% endif %}
+                                    </div>
+                                {% else %}
+                                    <p class="text-gray-400 text-xs">No validation data</p>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-sm border p-12 text-center">
+    <p class="text-gray-500">No submissions yet for this course.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.querySelectorAll('.submission-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+        if (e.target.closest('form')) return; // don't toggle on delete button
+        const id = row.dataset.id;
+        const detail = document.getElementById('detail-' + id);
+        detail.classList.toggle('hidden');
+    });
+});
+</script>
+{% endblock %}
