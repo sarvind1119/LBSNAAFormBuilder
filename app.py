@@ -15,19 +15,20 @@ from functools import wraps
 
 from flask import (
     Flask, render_template, request, jsonify, redirect,
-    url_for, session, flash, Response, abort
+    url_for, session, flash, Response, abort, send_file
 )
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
 from model_manager import ModelManager
 from validation_engine import validate_document
+from storage import get_storage
 from database import (
     init_db, get_default_fields_config, get_default_doc_config,
     create_course, get_all_courses, get_course_by_id, get_course_by_slug,
     update_course, toggle_course, delete_course,
     save_submission, get_submissions_by_course, get_submission_count,
-    delete_submission
+    delete_submission, update_submission_files, get_submission_by_id
 )
 
 # Configure logging
@@ -158,6 +159,16 @@ def validate(doc_type):
             outlier_model=outlier_model,
             user_name=user_name
         )
+
+        # Save file to pending storage if upload_session_id is provided
+        upload_session_id = request.form.get('upload_session_id', '').strip()
+        if upload_session_id:
+            try:
+                storage = get_storage()
+                storage.save_pending(upload_session_id, doc_type, temp_filepath)
+            except Exception as e:
+                logger.error(f"Failed to save pending file: {e}")
+
         return jsonify({
             'status': 'success',
             'validation': {
@@ -395,6 +406,39 @@ def admin_submission_delete(submission_id):
 
 
 # ============================================================================
+# FILE DOWNLOAD
+# ============================================================================
+
+@app.route('/admin/submission/<int:submission_id>/file/<doc_type>')
+@require_admin
+def admin_download_file(submission_id, doc_type):
+    """Serve an uploaded document file to the admin."""
+    doc_type = doc_type.upper()
+    if doc_type not in VALID_DOC_TYPES:
+        abort(400)
+
+    sub = get_submission_by_id(submission_id)
+    if not sub:
+        abort(404)
+
+    file_key = sub.get(f'{doc_type.lower()}_file')
+    if not file_key:
+        abort(404)
+
+    storage = get_storage()
+    file_path = storage.get_path(file_key)
+    if not file_path:
+        abort(404)
+
+    download = request.args.get('download', '0') == '1'
+    return send_file(
+        file_path,
+        as_attachment=download,
+        download_name=Path(file_key).name if download else None
+    )
+
+
+# ============================================================================
 # CSV EXPORT
 # ============================================================================
 
@@ -439,13 +483,17 @@ def admin_export_csv(course_id):
             row.append(fd.get(key, ''))
         for doc_type, _ in doc_columns:
             valid_key = f'{doc_type.lower()}_valid'
+            result_key = f'{doc_type.lower()}_result'
             val = sub.get(valid_key)
+            result = sub.get(result_key) or {}
+            confidence = result.get('confidence', 0)
+            conf_pct = f"{confidence * 100:.1f}%" if confidence else ''
             if val is None:
                 row.append('N/A')
             elif val:
-                row.append('ACCEPTED')
+                row.append(f'ACCEPTED ({conf_pct})' if conf_pct else 'ACCEPTED')
             else:
-                row.append('REJECTED')
+                row.append(f'REJECTED ({conf_pct})' if conf_pct else 'REJECTED')
         writer.writerow(row)
 
     output.seek(0)
@@ -533,6 +581,18 @@ def public_form_submit(slug):
             form_data=form_data,
             doc_results=doc_results
         )
+
+        # Finalize uploaded files from pending to permanent storage
+        upload_session_id = data.get('upload_session_id', '').strip()
+        if upload_session_id:
+            try:
+                storage = get_storage()
+                file_keys = storage.finalize(upload_session_id, course['slug'], submission_id)
+                if file_keys:
+                    update_submission_files(submission_id, file_keys)
+            except Exception as e:
+                logger.error(f"Failed to finalize files for submission {submission_id}: {e}")
+
         return jsonify({
             'status': 'success',
             'submission_id': submission_id,
@@ -595,6 +655,14 @@ def initialize_app():
     except Exception as e:
         logger.error(f"Failed to load models: {e}")
         raise
+
+    # Clean up stale pending uploads
+    try:
+        cleanup_hours = int(os.environ.get('UPLOAD_CLEANUP_HOURS', '24'))
+        storage = get_storage()
+        storage.cleanup_stale_pending(max_age_hours=cleanup_hours)
+    except Exception as e:
+        logger.warning(f"Pending upload cleanup failed: {e}")
 
     logger.info("=" * 70)
     logger.info("Server ready")

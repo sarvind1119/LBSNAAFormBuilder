@@ -65,6 +65,16 @@ def init_db():
                 ON submissions(course_id);
         """)
         conn.commit()
+
+        # Migration: add file columns if they don't exist
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(submissions)").fetchall()}
+        new_cols = {"photo_file": "TEXT", "id_file": "TEXT", "letter_file": "TEXT"}
+        for col_name, col_type in new_cols.items():
+            if col_name not in existing_cols:
+                conn.execute(f"ALTER TABLE submissions ADD COLUMN {col_name} {col_type}")
+                logger.info(f"Added column submissions.{col_name}")
+        conn.commit()
+
         logger.info("Database initialized: courses + submissions tables ready")
     finally:
         conn.close()
@@ -281,6 +291,38 @@ def get_submission_count(course_id):
             (course_id,)
         ).fetchone()
         return row["cnt"] if row else 0
+    finally:
+        conn.close()
+
+
+def update_submission_files(submission_id, file_keys):
+    """
+    Update file storage keys for a submission after finalization.
+    file_keys: dict like {"PHOTO": "course-slug/42/PHOTO.jpg", "ID": "course-slug/42/ID.pdf"}
+    """
+    conn = get_conn()
+    try:
+        conn.execute(
+            """UPDATE submissions SET photo_file=?, id_file=?, letter_file=? WHERE id=?""",
+            (
+                file_keys.get("PHOTO"),
+                file_keys.get("ID"),
+                file_keys.get("LETTER"),
+                submission_id,
+            )
+        )
+        conn.commit()
+        logger.info(f"Updated file keys for submission id={submission_id}")
+    finally:
+        conn.close()
+
+
+def get_submission_by_id(submission_id):
+    """Return a single submission by id."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM submissions WHERE id = ?", (submission_id,)).fetchone()
+        return _parse_submission_row(row) if row else None
     finally:
         conn.close()
 

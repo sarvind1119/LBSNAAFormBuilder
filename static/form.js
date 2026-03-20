@@ -7,6 +7,7 @@
     // State
     const docResults = {};   // { PHOTO: { valid, result }, ID: ..., LETTER: ... }
     const docFiles = {};     // { PHOTO: File, ... }
+    const uploadSessionId = crypto.randomUUID();
 
     // ========================================================================
     // FIELD VALIDATION
@@ -130,6 +131,7 @@
         const formData = new FormData();
         formData.append('file', file);
         formData.append('name', userName);
+        formData.append('upload_session_id', uploadSessionId);
 
         try {
             const response = await fetch(`/api/validate/${docType}`, {
@@ -314,7 +316,8 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     form_data: formData,
-                    doc_results: submissionDocResults
+                    doc_results: submissionDocResults,
+                    upload_session_id: uploadSessionId
                 })
             });
             const data = await response.json();

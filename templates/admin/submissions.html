@@ -56,13 +56,31 @@
                     {% for doc in enabled_docs %}
                     <td class="px-4 py-3 text-center">
                         {% set valid_key = doc.type.lower() ~ '_valid' %}
+                        {% set result_key = doc.type.lower() ~ '_result' %}
+                        {% set file_key = doc.type.lower() ~ '_file' %}
                         {% set val = sub.get(valid_key) %}
+                        {% set result = sub.get(result_key) or {} %}
+                        {% set confidence = result.get('confidence', 0) %}
+                        {% set conf_pct = '%.0f%%' % (confidence * 100) if confidence else '' %}
                         {% if val is none %}
-                            <span class="text-gray-300">--</span>
+                            <span class="text-gray-300 text-xs">--</span>
                         {% elif val %}
-                            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-100 text-green-600 text-xs font-bold" title="Accepted">&#10003;</span>
+                            <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-medium">
+                                &#10003; {{ conf_pct }}
+                            </span>
                         {% else %}
-                            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-600 text-xs font-bold" title="Rejected">&#10007;</span>
+                            <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-medium">
+                                &#10007; {{ conf_pct }}
+                            </span>
+                        {% endif %}
+                        {% if sub.get(file_key) %}
+                        <a href="{{ url_for('admin_download_file', submission_id=sub.id, doc_type=doc.type) }}?download=1"
+                           class="inline-block ml-1 text-accent-600 hover:text-accent-800" title="Download file"
+                           onclick="event.stopPropagation()">
+                            <svg class="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
+                        </a>
                         {% endif %}
                     </td>
                     {% endfor %}
@@ -81,7 +99,35 @@
                             <div class="bg-white rounded-lg border p-3">
                                 <h4 class="font-medium text-gray-700 mb-2">{{ doc.label }} Details</h4>
                                 {% set result_key = doc.type.lower() ~ '_result' %}
+                                {% set file_key = doc.type.lower() ~ '_file' %}
                                 {% set result = sub.get(result_key) %}
+                                {% set file_val = sub.get(file_key) %}
+
+                                {# Thumbnail preview #}
+                                {% if file_val %}
+                                <div class="mb-2">
+                                    {% set file_ext = file_val.rsplit('.', 1)[-1].lower() if '.' in file_val else '' %}
+                                    {% if file_ext in ('jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp') %}
+                                    <img src="{{ url_for('admin_download_file', submission_id=sub.id, doc_type=doc.type) }}"
+                                         alt="{{ doc.label }}"
+                                         class="w-20 h-20 object-cover rounded border cursor-pointer hover:opacity-80 transition doc-thumbnail"
+                                         data-full-src="{{ url_for('admin_download_file', submission_id=sub.id, doc_type=doc.type) }}"
+                                         data-doc-label="{{ doc.label }} - Submission #{{ sub.id }}"
+                                         onclick="event.stopPropagation(); openImageModal(this.dataset.fullSrc, this.dataset.docLabel)">
+                                    {% else %}
+                                    <div class="w-20 h-20 rounded border bg-gray-50 flex items-center justify-center">
+                                        <svg class="w-8 h-8 text-red-500" fill="currentColor" viewBox="0 0 24 24">
+                                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zM6 20V4h7v5h5v11H6z"/>
+                                            <text x="8" y="18" font-size="6" fill="currentColor" font-weight="bold">PDF</text>
+                                        </svg>
+                                    </div>
+                                    {% endif %}
+                                    <a href="{{ url_for('admin_download_file', submission_id=sub.id, doc_type=doc.type) }}?download=1"
+                                       class="text-xs text-accent-600 hover:underline mt-1 inline-block"
+                                       onclick="event.stopPropagation()">Download</a>
+                                </div>
+                                {% endif %}
+
                                 {% if result %}
                                     <div class="space-y-1 text-xs">
                                         <p><span class="text-gray-500">Result:</span> <span class="font-medium">{{ result.get('result', 'N/A') }}</span></p>
@@ -114,10 +160,38 @@
 {% endblock %}
 
 {% block scripts %}
+<!-- Image Modal -->
+<div id="imageModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70" onclick="closeImageModal()">
+    <div class="relative max-w-4xl max-h-[90vh] p-2" onclick="event.stopPropagation()">
+        <button onclick="closeImageModal()" class="absolute -top-2 -right-2 w-8 h-8 bg-white rounded-full shadow-lg flex items-center justify-center text-gray-700 hover:bg-gray-100 text-lg font-bold z-10">&times;</button>
+        <p id="modalLabel" class="text-white text-sm mb-2 text-center"></p>
+        <img id="modalImage" src="" alt="" class="max-w-full max-h-[80vh] rounded-lg shadow-2xl">
+    </div>
+</div>
+
 <script>
+function openImageModal(src, label) {
+    const modal = document.getElementById('imageModal');
+    document.getElementById('modalImage').src = src;
+    document.getElementById('modalLabel').textContent = label || '';
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeImageModal() {
+    const modal = document.getElementById('imageModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    document.getElementById('modalImage').src = '';
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeImageModal();
+});
+
 document.querySelectorAll('.submission-row').forEach(row => {
     row.addEventListener('click', (e) => {
-        if (e.target.closest('form')) return; // don't toggle on delete button
+        if (e.target.closest('form') || e.target.closest('.doc-thumbnail') || e.target.closest('a')) return;
         const id = row.dataset.id;
         const detail = document.getElementById('detail-' + id);
         detail.classList.toggle('hidden');

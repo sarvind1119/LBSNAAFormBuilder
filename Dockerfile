@@ -22,6 +22,7 @@ COPY database.py .
 COPY validation_engine.py .
 COPY celebrity_detection.py .
 COPY model_manager.py .
+COPY storage.py .
 
 # Templates and static files
 COPY templates/ ./templates/
@@ -34,7 +35,7 @@ COPY models/ ./models/
 COPY celebrity_reference/ ./celebrity_reference/
 
 # Create directories
-RUN mkdir -p temp_uploads data
+RUN mkdir -p temp_uploads data data/uploads
 
 EXPOSE 5000
 
