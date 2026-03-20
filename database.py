@@ -23,7 +23,12 @@ def get_conn():
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        # WAL mode may fail on some filesystems (e.g., Railway volumes)
+        # Fall back to default DELETE journal mode which works everywhere
+        logger.warning("WAL mode not supported on this filesystem, using DELETE journal mode")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
