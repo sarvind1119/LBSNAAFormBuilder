@@ -11,8 +11,11 @@ services:
       - SECRET_KEY=dev-secret-change-this
       - DATA_DIR=/app/data
     volumes:
-      - ./data:/app/data
+      - lbsnaa-data:/app/data
       - ./temp_uploads:/app/temp_uploads
       - ./models:/app/models:ro
       - ./celebrity_reference:/app/celebrity_reference:ro
     restart: unless-stopped
+
+volumes:
+  lbsnaa-data:
