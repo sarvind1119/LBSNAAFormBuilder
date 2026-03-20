@@ -17,6 +17,7 @@
     </h2>
 
     <form method="POST" id="courseForm" class="space-y-8">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         <!-- Course Info -->
         <div class="bg-white rounded-xl shadow-sm border p-6">

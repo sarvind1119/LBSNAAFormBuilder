@@ -12,10 +12,11 @@ services:
       - DATA_DIR=/app/data
     volumes:
       - lbsnaa-data:/app/data
-      - ./temp_uploads:/app/temp_uploads
+      - lbsnaa-temp:/app/temp_uploads
       - ./models:/app/models:ro
       - ./celebrity_reference:/app/celebrity_reference:ro
     restart: unless-stopped
 
 volumes:
   lbsnaa-data:
+  lbsnaa-temp:

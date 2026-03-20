@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 from datetime import datetime
+from werkzeug.security import generate_password_hash
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,15 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_submissions_course
                 ON submissions(course_id);
+
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                password_hash TEXT NOT NULL,
+                role          TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin', 'viewer')),
+                created_at    TEXT NOT NULL,
+                created_by    INTEGER REFERENCES users(id)
+            );
         """)
         conn.commit()
 
@@ -80,7 +90,18 @@ def init_db():
                 logger.info(f"Added column submissions.{col_name}")
         conn.commit()
 
-        logger.info("Database initialized: courses + submissions tables ready")
+        # Seed default admin user if no users exist
+        user_count = conn.execute("SELECT COUNT(*) as cnt FROM users").fetchone()["cnt"]
+        if user_count == 0:
+            default_pw = os.environ.get('ADMIN_PASSWORD', 'admin')
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+                ('admin', generate_password_hash(default_pw), 'admin', datetime.utcnow().isoformat())
+            )
+            conn.commit()
+            logger.info("Created default admin user (username: admin)")
+
+        logger.info("Database initialized: courses + submissions + users tables ready")
     finally:
         conn.close()
 
@@ -355,3 +376,91 @@ def _parse_submission_row(row):
         except (json.JSONDecodeError, TypeError):
             d[field] = None
     return d
+
+
+# ============================================================================
+# USER CRUD
+# ============================================================================
+
+def get_user_by_username(username):
+    """Return a user by username (includes password_hash for login verification)."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_user_by_id(user_id):
+    """Return a user by id (excludes password_hash)."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, username, role, created_at, created_by FROM users WHERE id = ?",
+            (user_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_all_users():
+    """Return all users (excludes password_hash)."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, username, role, created_at, created_by FROM users ORDER BY id"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def create_user(username, password_hash, role, created_by=None):
+    """Create a new user. Returns user id."""
+    conn = get_conn()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO users (username, password_hash, role, created_at, created_by) VALUES (?, ?, ?, ?, ?)",
+            (username, password_hash, role, datetime.utcnow().isoformat(), created_by)
+        )
+        conn.commit()
+        uid = cursor.lastrowid
+        logger.info(f"Created user '{username}' (id={uid}, role={role})")
+        return uid
+    finally:
+        conn.close()
+
+
+def update_user_role(user_id, new_role):
+    """Update a user's role."""
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE users SET role = ? WHERE id = ?", (new_role, user_id))
+        conn.commit()
+        logger.info(f"Updated role for user id={user_id} to {new_role}")
+    finally:
+        conn.close()
+
+
+def update_user_password(user_id, new_password_hash):
+    """Update a user's password."""
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_password_hash, user_id))
+        conn.commit()
+        logger.info(f"Updated password for user id={user_id}")
+    finally:
+        conn.close()
+
+
+def delete_user(user_id):
+    """Delete a user."""
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        logger.info(f"Deleted user id={user_id}")
+    finally:
+        conn.close()

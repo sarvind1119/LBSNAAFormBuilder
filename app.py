@@ -1,6 +1,7 @@
 """
 app.py - LBSNAA Course Form Builder
 Flask application with admin panel, public forms, and document validation API.
+Includes CSRF protection, rate limiting, secure headers, and role-based auth.
 """
 
 import os
@@ -18,7 +19,11 @@ from flask import (
     url_for, session, flash, Response, abort, send_file
 )
 from flask_cors import CORS
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 
 from model_manager import ModelManager
 from validation_engine import validate_document
@@ -28,7 +33,9 @@ from database import (
     create_course, get_all_courses, get_course_by_id, get_course_by_slug,
     update_course, toggle_course, delete_course,
     save_submission, get_submissions_by_course, get_submission_count,
-    delete_submission, update_submission_files, get_submission_by_id
+    delete_submission, update_submission_files, get_submission_by_id,
+    get_user_by_username, get_user_by_id, get_all_users,
+    create_user, update_user_role, update_user_password, delete_user
 )
 
 # Configure logging
@@ -46,10 +53,40 @@ app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # 5MB
 app.config['UPLOAD_FOLDER'] = Path('temp_uploads')
 app.config['UPLOAD_FOLDER'].mkdir(exist_ok=True)
 
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin')
+# CSRF protection
+csrf = CSRFProtect(app)
+
+# Rate limiter
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
 
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'pdf', 'webp', 'bmp', 'tiff', 'tif', 'gif'}
 VALID_DOC_TYPES = {'ID', 'PHOTO', 'LETTER'}
+
+
+# ============================================================================
+# SECURITY HEADERS
+# ============================================================================
+
+@app.after_request
+def set_security_headers(response):
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'"
+    )
+    return response
 
 
 # ============================================================================
@@ -101,14 +138,49 @@ def require_models(f):
     return decorated
 
 
-def require_admin(f):
-    """Decorator to protect admin routes."""
+# ============================================================================
+# AUTH DECORATORS
+# ============================================================================
+
+def require_login(f):
+    """Require any authenticated user (admin or viewer)."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not session.get('admin_logged_in'):
+        if not session.get('user_id'):
             return redirect(url_for('admin_login'))
         return f(*args, **kwargs)
     return decorated
+
+
+def require_admin(f):
+    """Require authenticated user with admin role."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('user_id'):
+            return redirect(url_for('admin_login'))
+        if session.get('user_role') != 'admin':
+            flash('You do not have permission to perform this action.', 'error')
+            return redirect(url_for('admin_dashboard'))
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ============================================================================
+# TEMPLATE CONTEXT
+# ============================================================================
+
+@app.context_processor
+def inject_user():
+    """Make current_user available in all templates."""
+    if session.get('user_id'):
+        return {
+            'current_user': {
+                'id': session.get('user_id'),
+                'username': session.get('username'),
+                'role': session.get('user_role'),
+            }
+        }
+    return {'current_user': None}
 
 
 # ============================================================================
@@ -125,10 +197,12 @@ def health():
 
 
 # ============================================================================
-# DOCUMENT VALIDATION API (unchanged from original)
+# DOCUMENT VALIDATION API
 # ============================================================================
 
+@csrf.exempt
 @app.route('/api/validate/<doc_type>', methods=['POST'])
+@limiter.limit("30 per minute")
 @require_models
 def validate(doc_type):
     if doc_type.upper() not in VALID_DOC_TYPES:
@@ -200,19 +274,24 @@ def validate(doc_type):
 # ============================================================================
 
 @app.route('/admin/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute")
 def admin_login():
     if request.method == 'POST':
+        username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
-        if password == ADMIN_PASSWORD:
-            session['admin_logged_in'] = True
+        user = get_user_by_username(username)
+        if user and check_password_hash(user['password_hash'], password):
+            session['user_id'] = user['id']
+            session['username'] = user['username']
+            session['user_role'] = user['role']
             return redirect(url_for('admin_dashboard'))
-        flash('Incorrect password.', 'error')
+        flash('Invalid username or password.', 'error')
     return render_template('admin/login.html')
 
 
 @app.route('/admin/logout')
 def admin_logout():
-    session.pop('admin_logged_in', None)
+    session.clear()
     return redirect(url_for('admin_login'))
 
 
@@ -221,7 +300,7 @@ def admin_logout():
 # ============================================================================
 
 @app.route('/admin')
-@require_admin
+@require_login
 def admin_dashboard():
     courses = get_all_courses()
     return render_template('admin/dashboard.html', courses=courses)
@@ -300,7 +379,6 @@ def _save_course(is_new, course_id=None):
         if not label:
             continue
         ftype = custom_types[i] if i < len(custom_types) else 'text'
-        # Checkbox: check for indexed required flag
         req = request.form.get(f'custom_field_required_{i}') == '1'
         opts_str = custom_options[i] if i < len(custom_options) else ''
         options = [o.strip() for o in opts_str.split(',') if o.strip()] if ftype == 'select' else []
@@ -357,14 +435,13 @@ def admin_course_delete(course_id):
 # ============================================================================
 
 @app.route('/admin/course/<int:course_id>/submissions')
-@require_admin
+@require_login
 def admin_submissions(course_id):
     course = get_course_by_id(course_id)
     if not course:
         abort(404)
     submissions = get_submissions_by_course(course_id)
 
-    # Build list of enabled field keys for table headers
     enabled_fields = []
     for f in course['fields_config'].get('default_fields', []):
         if f.get('enabled'):
@@ -372,7 +449,6 @@ def admin_submissions(course_id):
     for f in course['fields_config'].get('custom_fields', []):
         enabled_fields.append(f)
 
-    # Build list of enabled docs
     enabled_docs = []
     for doc_type in ['PHOTO', 'ID', 'LETTER']:
         dc = course['doc_config'].get(doc_type, {})
@@ -389,7 +465,6 @@ def admin_submissions(course_id):
 @app.route('/admin/submission/<int:submission_id>/delete', methods=['POST'])
 @require_admin
 def admin_submission_delete(submission_id):
-    # Get course_id before deleting so we can redirect back
     from database import get_conn
     conn = get_conn()
     try:
@@ -410,7 +485,7 @@ def admin_submission_delete(submission_id):
 # ============================================================================
 
 @app.route('/admin/submission/<int:submission_id>/file/<doc_type>')
-@require_admin
+@require_login
 def admin_download_file(submission_id, doc_type):
     """Serve an uploaded document file to the admin."""
     doc_type = doc_type.upper()
@@ -443,7 +518,7 @@ def admin_download_file(submission_id, doc_type):
 # ============================================================================
 
 @app.route('/admin/course/<int:course_id>/export')
-@require_admin
+@require_login
 def admin_export_csv(course_id):
     course = get_course_by_id(course_id)
     if not course:
@@ -471,6 +546,7 @@ def admin_export_csv(course_id):
     headers = ['#', 'Submitted At'] + field_labels
     for _, label in doc_columns:
         headers.append(f'{label} Status')
+        headers.append(f'{label} Confidence')
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -490,10 +566,13 @@ def admin_export_csv(course_id):
             conf_pct = f"{confidence * 100:.1f}%" if confidence else ''
             if val is None:
                 row.append('N/A')
+                row.append('')
             elif val:
-                row.append(f'ACCEPTED ({conf_pct})' if conf_pct else 'ACCEPTED')
+                row.append('ACCEPTED')
+                row.append(conf_pct)
             else:
-                row.append(f'REJECTED ({conf_pct})' if conf_pct else 'REJECTED')
+                row.append('REJECTED')
+                row.append(conf_pct)
         writer.writerow(row)
 
     output.seek(0)
@@ -501,8 +580,79 @@ def admin_export_csv(course_id):
     return Response(
         output.getvalue(),
         mimetype='text/csv',
-        headers={'Content-Disposition': f'attachment; filename={filename}'}
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
     )
+
+
+# ============================================================================
+# USER MANAGEMENT (admin only)
+# ============================================================================
+
+@app.route('/admin/users')
+@require_admin
+def admin_users():
+    users = get_all_users()
+    return render_template('admin/users.html', users=users)
+
+
+@app.route('/admin/users/new', methods=['GET', 'POST'])
+@require_admin
+def admin_user_new():
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        role = request.form.get('role', 'viewer')
+        if not username or not password:
+            flash('Username and password are required.', 'error')
+            return redirect(request.url)
+        if role not in ('admin', 'viewer'):
+            role = 'viewer'
+        try:
+            create_user(username, generate_password_hash(password), role, created_by=session.get('user_id'))
+            flash(f'User "{username}" created.', 'success')
+            return redirect(url_for('admin_users'))
+        except Exception as e:
+            if 'UNIQUE constraint' in str(e):
+                flash('Username already exists.', 'error')
+            else:
+                flash(f'Error: {e}', 'error')
+            return redirect(request.url)
+    return render_template('admin/user_form.html', user=None)
+
+
+@app.route('/admin/users/<int:user_id>/edit', methods=['GET', 'POST'])
+@require_admin
+def admin_user_edit(user_id):
+    user = get_user_by_id(user_id)
+    if not user:
+        abort(404)
+    if request.method == 'POST':
+        new_role = request.form.get('role', user['role'])
+        new_password = request.form.get('password', '').strip()
+        if new_role not in ('admin', 'viewer'):
+            new_role = 'viewer'
+        update_user_role(user_id, new_role)
+        if new_password:
+            update_user_password(user_id, generate_password_hash(new_password))
+        # If user edited their own role, update session
+        if user_id == session.get('user_id'):
+            session['user_role'] = new_role
+        flash(f'User "{user["username"]}" updated.', 'success')
+        return redirect(url_for('admin_users'))
+    return render_template('admin/user_form.html', user=user)
+
+
+@app.route('/admin/users/<int:user_id>/delete', methods=['POST'])
+@require_admin
+def admin_user_delete(user_id):
+    if user_id == session.get('user_id'):
+        flash('Cannot delete your own account.', 'error')
+        return redirect(url_for('admin_users'))
+    user = get_user_by_id(user_id)
+    if user:
+        delete_user(user_id)
+        flash(f'User "{user["username"]}" deleted.', 'success')
+    return redirect(url_for('admin_users'))
 
 
 # ============================================================================
@@ -517,7 +667,6 @@ def public_form(slug):
     if not course['is_active']:
         return render_template('public/closed.html', course=course)
 
-    # Build enabled fields and docs for the template
     enabled_fields = []
     for f in course['fields_config'].get('default_fields', []):
         if f.get('enabled'):
@@ -541,6 +690,7 @@ def public_form(slug):
                            enabled_docs=enabled_docs)
 
 
+@csrf.exempt
 @app.route('/form/<slug>/submit', methods=['POST'])
 def public_form_submit(slug):
     course = get_course_by_slug(slug)

@@ -10,6 +10,9 @@
                class="bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition">
                 Export CSV
             </a>
+            <span class="text-sm text-gray-500">{{ current_user.username }}
+                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium {% if current_user.role == 'admin' %}bg-purple-100 text-purple-700{% else %}bg-gray-100 text-gray-600{% endif %}">{{ current_user.role }}</span>
+            </span>
             <a href="{{ url_for('admin_logout') }}" class="text-gray-500 hover:text-gray-700 text-sm">Logout</a>
         </div>
     </div>
@@ -85,10 +88,15 @@
                     </td>
                     {% endfor %}
                     <td class="px-4 py-3 text-center">
+                        {% if current_user and current_user.role == 'admin' %}
                         <form method="POST" action="{{ url_for('admin_submission_delete', submission_id=sub.id) }}" class="inline"
                               onsubmit="return confirm('Delete this submission?')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="text-red-400 hover:text-red-600 text-sm">Delete</button>
                         </form>
+                        {% else %}
+                        <span class="text-gray-300 text-sm">--</span>
+                        {% endif %}
                     </td>
                 </tr>
                 <!-- Expandable detail row -->
