@@ -10,6 +10,8 @@ services:
       - ADMIN_PASSWORD=admin
       - SECRET_KEY=dev-secret-change-this
       - DATA_DIR=/app/data
+      # Uncomment and set your OpenAI API key to enable LLM fallback OCR
+      # - OPENAI_API_KEY=sk-your-key-here
     volumes:
       - lbsnaa-data:/app/data
       - lbsnaa-temp:/app/temp_uploads

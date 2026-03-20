@@ -656,6 +656,39 @@ def admin_user_delete(user_id):
 
 
 # ============================================================================
+# CHANGE PASSWORD (any logged-in user)
+# ============================================================================
+
+@app.route('/admin/change-password', methods=['GET', 'POST'])
+@require_login
+def admin_change_password():
+    if request.method == 'POST':
+        current_pw = request.form.get('current_password', '')
+        new_pw = request.form.get('new_password', '')
+        confirm_pw = request.form.get('confirm_password', '')
+
+        # Verify current password
+        user = get_user_by_username(session.get('username'))
+        if not user or not check_password_hash(user['password_hash'], current_pw):
+            flash('Current password is incorrect.', 'error')
+            return redirect(request.url)
+
+        if not new_pw or len(new_pw) < 4:
+            flash('New password must be at least 4 characters.', 'error')
+            return redirect(request.url)
+
+        if new_pw != confirm_pw:
+            flash('New passwords do not match.', 'error')
+            return redirect(request.url)
+
+        update_user_password(user['id'], generate_password_hash(new_pw))
+        flash('Password changed successfully.', 'success')
+        return redirect(url_for('admin_dashboard'))
+
+    return render_template('admin/change_password.html')
+
+
+# ============================================================================
 # PUBLIC FORM
 # ============================================================================
 
