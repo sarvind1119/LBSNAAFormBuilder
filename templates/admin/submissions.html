@@ -95,18 +95,19 @@
                             <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-medium">
                                 &#10007; {{ conf_pct }}
                             </span>
-                            {% if current_user and current_user.role == 'admin' and smtp_configured %}
-                            <button type="button"
-                                    class="flag-notify-btn text-xs text-orange-600 hover:text-orange-800 ml-1 font-medium"
-                                    data-submission-id="{{ sub.id }}"
-                                    data-doc-type="{{ doc.type }}"
-                                    data-doc-label="{{ doc.label }}"
-                                    data-reason="{{ result.get('message', 'Document was flagged') }}"
-                                    data-email="{{ sub.form_data.get('email', sub.email) }}"
-                                    onclick="event.stopPropagation(); openFlagModal(this)">
-                                Flag & Notify
-                            </button>
-                            {% endif %}
+                        {% endif %}
+                        {# Flag & Notify button - available on ALL uploaded documents #}
+                        {% if val is not none and current_user and current_user.role == 'admin' and smtp_configured %}
+                        <button type="button"
+                                class="flag-notify-btn text-xs text-orange-600 hover:text-orange-800 ml-1 font-medium"
+                                data-submission-id="{{ sub.id }}"
+                                data-doc-type="{{ doc.type }}"
+                                data-doc-label="{{ doc.label }}"
+                                data-reason="{{ result.get('message', 'Document was flagged by admin') }}"
+                                data-email="{{ sub.form_data.get('email', sub.email) }}"
+                                onclick="event.stopPropagation(); openFlagModal(this)">
+                            Flag & Notify
+                        </button>
                         {% endif %}
                         {# Notification status badges #}
                         {% set notifs = notification_map.get(sub.id, []) %}
@@ -276,7 +277,18 @@
             <h3 class="text-lg font-semibold text-white">Bulk Flag & Notify</h3>
         </div>
         <div class="p-6 space-y-4">
-            <p class="text-sm text-gray-600">This will send re-upload notifications for <strong>all rejected documents</strong> on <span id="bulkSelectedCount" class="font-bold">0</span> selected submissions.</p>
+            <p class="text-sm text-gray-600">Send re-upload notifications to <span id="bulkSelectedCount" class="font-bold">0</span> selected submissions.</p>
+            <div>
+                <label class="text-sm font-medium text-gray-700">Which document type(s) to flag?</label>
+                <div class="mt-2 space-y-2">
+                    {% for doc in enabled_docs %}
+                    <label class="flex items-center gap-2 text-sm">
+                        <input type="checkbox" class="bulk-doc-type rounded border-gray-300" value="{{ doc.type }}" data-label="{{ doc.label }}" checked>
+                        <span>{{ doc.label }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
             <div>
                 <label for="bulkMessage" class="text-sm font-medium text-gray-700">Message to Participants</label>
                 <textarea id="bulkMessage" rows="3" class="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
@@ -475,22 +487,30 @@ async function sendBulkFlagNotification() {
         return;
     }
 
-    // Collect all checked submissions and their rejected doc types
+    // Collect selected doc types from the modal checkboxes
+    const selectedDocTypes = [];
+    document.querySelectorAll('.bulk-doc-type:checked').forEach(cb => {
+        selectedDocTypes.push(cb.value);
+    });
+
+    if (selectedDocTypes.length === 0) {
+        statusEl.textContent = 'Please select at least one document type to flag.';
+        statusEl.className = 'text-sm p-3 rounded-lg bg-yellow-50 text-yellow-700';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    // Build items: each selected submission x each selected doc type
     const items = [];
     document.querySelectorAll('.bulk-check:checked').forEach(cb => {
         const subId = parseInt(cb.dataset.submissionId);
-        const row = cb.closest('tr');
-        // Find rejected docs in this row (look for flag-notify buttons)
-        row.querySelectorAll('.flag-notify-btn').forEach(flagBtn => {
-            items.push({
-                submission_id: subId,
-                doc_type: flagBtn.dataset.docType
-            });
+        selectedDocTypes.forEach(docType => {
+            items.push({ submission_id: subId, doc_type: docType });
         });
     });
 
     if (items.length === 0) {
-        statusEl.textContent = 'No rejected documents found in selected submissions.';
+        statusEl.textContent = 'No submissions selected.';
         statusEl.className = 'text-sm p-3 rounded-lg bg-yellow-50 text-yellow-700';
         statusEl.classList.remove('hidden');
         return;
