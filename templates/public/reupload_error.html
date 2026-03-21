@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Re-upload Unavailable{% endblock %}
+
+{% block content %}
+<div class="max-w-md mx-auto text-center py-16">
+    <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+        <svg class="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+    </div>
+    <h1 class="text-xl font-semibold text-gray-900 mb-2">Re-upload Unavailable</h1>
+    <p class="text-gray-600">{{ message }}</p>
+    <p class="text-gray-400 text-sm mt-6">If you believe this is an error, please contact the administrator.</p>
+</div>
+{% endblock %}

@@ -100,6 +100,30 @@ class LocalFileStorage:
             logger.error(f"Error deleting file {key}: {e}")
         return False
 
+    def replace_file(self, course_slug, submission_id, doc_type, source_path):
+        """
+        Replace a document file for a submission (used during re-upload).
+        Deletes any existing file for the doc_type and copies the new one.
+        Returns the new storage key.
+        """
+        source = Path(source_path)
+        ext = source.suffix.lower() or '.bin'
+        final_dir = self.root / course_slug / str(submission_id)
+        final_dir.mkdir(parents=True, exist_ok=True)
+
+        # Remove existing file for this doc_type
+        for existing in final_dir.glob(f"{doc_type}.*"):
+            existing.unlink()
+            logger.info(f"Removed old file: {existing.name}")
+
+        dest_filename = f"{doc_type}{ext}"
+        dest_path = final_dir / dest_filename
+        shutil.copy2(str(source), str(dest_path))
+
+        key = f"{course_slug}/{submission_id}/{dest_filename}"
+        logger.info(f"Replaced file: {key}")
+        return key
+
     def delete_submission_files(self, course_slug, submission_id):
         """Delete all files for a submission."""
         sub_dir = self.root / course_slug / str(submission_id)

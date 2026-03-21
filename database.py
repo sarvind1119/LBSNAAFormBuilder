@@ -78,6 +78,41 @@ def init_db():
                 created_at    TEXT NOT NULL,
                 created_by    INTEGER REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS notifications (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                submission_id   INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+                doc_type        TEXT NOT NULL,
+                reason          TEXT NOT NULL,
+                admin_message   TEXT DEFAULT '',
+                deadline        TEXT NOT NULL,
+                token           TEXT NOT NULL UNIQUE,
+                token_used      INTEGER DEFAULT 0,
+                email_sent_at   TEXT,
+                email_status    TEXT DEFAULT 'pending',
+                created_by      INTEGER NOT NULL REFERENCES users(id),
+                created_at      TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_notifications_submission
+                ON notifications(submission_id);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_token
+                ON notifications(token);
+
+            CREATE TABLE IF NOT EXISTS reupload_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                notification_id INTEGER NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+                submission_id   INTEGER NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+                doc_type        TEXT NOT NULL,
+                new_valid       INTEGER,
+                new_result      TEXT,
+                new_file        TEXT,
+                uploaded_at     TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_reupload_log_notification
+                ON reupload_log(notification_id);
         """)
         conn.commit()
 
@@ -462,5 +497,162 @@ def delete_user(user_id):
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
         logger.info(f"Deleted user id={user_id}")
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# NOTIFICATION CRUD
+# ============================================================================
+
+def create_notification(submission_id, doc_type, reason, admin_message, deadline, token, created_by):
+    """Create a notification record. Returns notification id."""
+    conn = get_conn()
+    try:
+        cursor = conn.execute(
+            """INSERT INTO notifications
+               (submission_id, doc_type, reason, admin_message, deadline, token, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (submission_id, doc_type, reason, admin_message, deadline, token,
+             created_by, datetime.utcnow().isoformat())
+        )
+        conn.commit()
+        nid = cursor.lastrowid
+        logger.info(f"Created notification id={nid} for submission={submission_id}, doc={doc_type}")
+        return nid
+    finally:
+        conn.close()
+
+
+def get_notification_by_token(token):
+    """Return notification joined with submission and course data for re-upload page."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """SELECT n.*, s.email, s.form_data, s.course_id,
+                      c.name as course_name, c.slug as course_slug, c.doc_config
+               FROM notifications n
+               JOIN submissions s ON s.id = n.submission_id
+               JOIN courses c ON c.id = s.course_id
+               WHERE n.token = ?""",
+            (token,)
+        ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["form_data"] = json.loads(d["form_data"]) if d.get("form_data") else {}
+        d["doc_config"] = json.loads(d["doc_config"]) if d.get("doc_config") else {}
+        return d
+    finally:
+        conn.close()
+
+
+def mark_notification_sent(notification_id):
+    """Mark notification email as sent."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE notifications SET email_sent_at=?, email_status='sent' WHERE id=?",
+            (datetime.utcnow().isoformat(), notification_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_notification_failed(notification_id):
+    """Mark notification email as failed."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE notifications SET email_status='failed' WHERE id=?",
+            (notification_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_token_used(notification_id):
+    """Mark a re-upload token as used."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE notifications SET token_used=1 WHERE id=?",
+            (notification_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_notifications_for_submission(submission_id):
+    """Return all notifications for a submission, newest first."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT n.*, u.username as created_by_username
+               FROM notifications n
+               LEFT JOIN users u ON u.id = n.created_by
+               WHERE n.submission_id = ?
+               ORDER BY n.created_at DESC""",
+            (submission_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_notifications_for_course(course_id):
+    """Return all notifications for submissions in a course (for badge display)."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT n.submission_id, n.doc_type, n.token_used,
+                      n.email_sent_at, n.email_status, n.created_at
+               FROM notifications n
+               JOIN submissions s ON s.id = n.submission_id
+               WHERE s.course_id = ?
+               ORDER BY n.created_at DESC""",
+            (course_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# REUPLOAD LOG CRUD
+# ============================================================================
+
+def save_reupload_log(notification_id, submission_id, doc_type, new_valid, new_result, new_file):
+    """Log a re-upload attempt."""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO reupload_log
+               (notification_id, submission_id, doc_type, new_valid, new_result, new_file, uploaded_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (notification_id, submission_id, doc_type, new_valid,
+             json.dumps(new_result) if new_result else None,
+             new_file, datetime.utcnow().isoformat())
+        )
+        conn.commit()
+        logger.info(f"Logged re-upload for notification={notification_id}, doc={doc_type}")
+    finally:
+        conn.close()
+
+
+def update_submission_doc(submission_id, doc_type, valid, result, file_key):
+    """Update a specific document's validation result and file on a submission."""
+    col_prefix = doc_type.lower()
+    conn = get_conn()
+    try:
+        conn.execute(
+            f"UPDATE submissions SET {col_prefix}_valid=?, {col_prefix}_result=?, {col_prefix}_file=? WHERE id=?",
+            (1 if valid else 0, json.dumps(result) if result else None, file_key, submission_id)
+        )
+        conn.commit()
+        logger.info(f"Updated submission={submission_id} doc={doc_type} valid={valid}")
     finally:
         conn.close()

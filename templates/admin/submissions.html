@@ -28,9 +28,16 @@
         <h2 class="text-xl font-semibold text-gray-800">{{ course.name }}</h2>
         <p class="text-sm text-gray-500">{{ submissions|length }} submission{{ 's' if submissions|length != 1 else '' }}</p>
     </div>
-    <div class="flex items-center gap-2 text-sm">
-        <span class="text-gray-500">Form link:</span>
-        <code class="bg-gray-100 px-2 py-1 rounded text-xs font-mono">/form/{{ course.slug }}</code>
+    <div class="flex items-center gap-3">
+        {% if current_user and current_user.role == 'admin' and smtp_configured %}
+        <button id="bulkNotifyBtn" onclick="openBulkFlagModal()" class="hidden bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium py-2 px-4 rounded-lg transition">
+            Bulk Flag & Notify (<span id="bulkCount">0</span>)
+        </button>
+        {% endif %}
+        <div class="flex items-center gap-2 text-sm">
+            <span class="text-gray-500">Form link:</span>
+            <code class="bg-gray-100 px-2 py-1 rounded text-xs font-mono">/form/{{ course.slug }}</code>
+        </div>
     </div>
 </div>
 
@@ -40,6 +47,11 @@
         <table class="min-w-full divide-y divide-gray-200">
             <thead class="bg-gray-50">
                 <tr>
+                    {% if current_user and current_user.role == 'admin' and smtp_configured %}
+                    <th class="px-3 py-3 text-center">
+                        <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" class="rounded border-gray-300">
+                    </th>
+                    {% endif %}
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">#</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitted</th>
                     {% for field in enabled_fields %}
@@ -54,6 +66,11 @@
             <tbody class="divide-y divide-gray-200">
                 {% for sub in submissions %}
                 <tr class="hover:bg-gray-50 cursor-pointer submission-row" data-id="{{ sub.id }}">
+                    {% if current_user and current_user.role == 'admin' and smtp_configured %}
+                    <td class="px-3 py-3 text-center" onclick="event.stopPropagation()">
+                        <input type="checkbox" class="bulk-check rounded border-gray-300" data-submission-id="{{ sub.id }}" onchange="updateBulkCount()">
+                    </td>
+                    {% endif %}
                     <td class="px-4 py-3 text-sm text-gray-500">{{ loop.index }}</td>
                     <td class="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">{{ sub.submitted_at[:16] }}</td>
                     {% for field in enabled_fields %}
@@ -78,7 +95,32 @@
                             <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-medium">
                                 &#10007; {{ conf_pct }}
                             </span>
+                            {% if current_user and current_user.role == 'admin' and smtp_configured %}
+                            <button type="button"
+                                    class="flag-notify-btn text-xs text-orange-600 hover:text-orange-800 ml-1 font-medium"
+                                    data-submission-id="{{ sub.id }}"
+                                    data-doc-type="{{ doc.type }}"
+                                    data-doc-label="{{ doc.label }}"
+                                    data-reason="{{ result.get('message', 'Document was flagged') }}"
+                                    data-email="{{ sub.form_data.get('email', sub.email) }}"
+                                    onclick="event.stopPropagation(); openFlagModal(this)">
+                                Flag & Notify
+                            </button>
+                            {% endif %}
                         {% endif %}
+                        {# Notification status badges #}
+                        {% set notifs = notification_map.get(sub.id, []) %}
+                        {% for n in notifs %}
+                            {% if n.doc_type == doc.type %}
+                                {% if n.token_used %}
+                                    <span class="block text-xs text-blue-600 font-medium mt-1">Re-uploaded</span>
+                                {% elif n.email_status == 'sent' %}
+                                    <span class="block text-xs text-orange-500 mt-1">Notified {{ n.email_sent_at[:10] if n.email_sent_at else '' }}</span>
+                                {% elif n.email_status == 'failed' %}
+                                    <span class="block text-xs text-red-400 mt-1">Email failed</span>
+                                {% endif %}
+                            {% endif %}
+                        {% endfor %}
                         {% if sub.get(file_key) %}
                         <a href="{{ url_for('admin_download_file', submission_id=sub.id, doc_type=doc.type) }}?download=1"
                            class="inline-block ml-1 text-accent-600 hover:text-accent-800" title="Download file"
@@ -104,7 +146,7 @@
                 </tr>
                 <!-- Expandable detail row -->
                 <tr class="hidden detail-row" id="detail-{{ sub.id }}">
-                    <td colspan="{{ 3 + enabled_fields|length + enabled_docs|length }}" class="px-4 py-4 bg-gray-50">
+                    <td colspan="100%" class="px-4 py-4 bg-gray-50">
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                             {% for doc in enabled_docs %}
                             <div class="bg-white rounded-lg border p-3">
@@ -156,6 +198,14 @@
                             </div>
                             {% endfor %}
                         </div>
+                        <!-- Notification History -->
+                        <div class="mt-4 notification-history" data-submission-id="{{ sub.id }}" data-loaded="false">
+                            <button onclick="event.stopPropagation(); loadNotificationHistory({{ sub.id }})"
+                                    class="text-xs text-gray-500 hover:text-gray-700 underline">
+                                View notification history
+                            </button>
+                            <div id="notif-history-{{ sub.id }}" class="mt-2 hidden"></div>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -180,7 +230,79 @@
     </div>
 </div>
 
+<!-- Flag & Notify Modal -->
+<div id="flagModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50" onclick="closeFlagModal()">
+    <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden" onclick="event.stopPropagation()">
+        <div class="bg-orange-500 px-6 py-4">
+            <h3 class="text-lg font-semibold text-white">Flag & Notify Participant</h3>
+        </div>
+        <div class="p-6 space-y-4">
+            <div>
+                <label class="text-sm font-medium text-gray-700">Document</label>
+                <p id="flagDocLabel" class="text-sm text-gray-900 font-medium mt-1"></p>
+            </div>
+            <div>
+                <label class="text-sm font-medium text-gray-700">Validation Reason</label>
+                <p id="flagReason" class="text-sm text-red-600 mt-1"></p>
+            </div>
+            <div>
+                <label class="text-sm font-medium text-gray-700">Participant Email</label>
+                <p id="flagEmail" class="text-sm text-gray-900 mt-1"></p>
+            </div>
+            <div>
+                <label for="flagMessage" class="text-sm font-medium text-gray-700">Your Message to Participant</label>
+                <textarea id="flagMessage" rows="3" class="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                          placeholder="e.g., Please upload a clearer photo of your Aadhaar card"></textarea>
+            </div>
+            <div>
+                <label for="flagDeadline" class="text-sm font-medium text-gray-700">Deadline for Re-upload</label>
+                <input type="date" id="flagDeadline" class="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500">
+            </div>
+            <div id="flagStatus" class="hidden text-sm p-3 rounded-lg"></div>
+        </div>
+        <div class="bg-gray-50 px-6 py-4 flex justify-end gap-3">
+            <button onclick="closeFlagModal()" class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-200 rounded-lg transition">Cancel</button>
+            <button id="flagSendBtn" onclick="sendFlagNotification()" class="px-4 py-2 text-sm text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition font-medium">
+                Send Notification
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Bulk Flag & Notify Modal -->
+<div id="bulkFlagModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50" onclick="closeBulkFlagModal()">
+    <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden" onclick="event.stopPropagation()">
+        <div class="bg-orange-500 px-6 py-4">
+            <h3 class="text-lg font-semibold text-white">Bulk Flag & Notify</h3>
+        </div>
+        <div class="p-6 space-y-4">
+            <p class="text-sm text-gray-600">This will send re-upload notifications for <strong>all rejected documents</strong> on <span id="bulkSelectedCount" class="font-bold">0</span> selected submissions.</p>
+            <div>
+                <label for="bulkMessage" class="text-sm font-medium text-gray-700">Message to Participants</label>
+                <textarea id="bulkMessage" rows="3" class="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                          placeholder="e.g., Please re-upload a valid document"></textarea>
+            </div>
+            <div>
+                <label for="bulkDeadline" class="text-sm font-medium text-gray-700">Deadline</label>
+                <input type="date" id="bulkDeadline" class="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500">
+            </div>
+            <div id="bulkStatus" class="hidden text-sm p-3 rounded-lg"></div>
+        </div>
+        <div class="bg-gray-50 px-6 py-4 flex justify-end gap-3">
+            <button onclick="closeBulkFlagModal()" class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-200 rounded-lg transition">Cancel</button>
+            <button id="bulkSendBtn" onclick="sendBulkFlagNotification()" class="px-4 py-2 text-sm text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition font-medium">
+                Send All Notifications
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
+const CSRF_TOKEN = '{{ csrf_token() }}';
+
+// ============================
+// Image Modal
+// ============================
 function openImageModal(src, label) {
     const modal = document.getElementById('imageModal');
     document.getElementById('modalImage').src = src;
@@ -196,17 +318,254 @@ function closeImageModal() {
     document.getElementById('modalImage').src = '';
 }
 
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeImageModal();
-});
-
+// ============================
+// Submission row expand
+// ============================
 document.querySelectorAll('.submission-row').forEach(row => {
     row.addEventListener('click', (e) => {
-        if (e.target.closest('form') || e.target.closest('.doc-thumbnail') || e.target.closest('a')) return;
+        if (e.target.closest('form') || e.target.closest('.doc-thumbnail') || e.target.closest('a') || e.target.closest('button') || e.target.closest('input[type="checkbox"]')) return;
         const id = row.dataset.id;
         const detail = document.getElementById('detail-' + id);
         detail.classList.toggle('hidden');
     });
 });
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        closeImageModal();
+        closeFlagModal();
+        closeBulkFlagModal();
+    }
+});
+
+// ============================
+// Flag & Notify (single)
+// ============================
+let flagSubmissionId = null;
+let flagDocType = null;
+
+function openFlagModal(btn) {
+    flagSubmissionId = btn.dataset.submissionId;
+    flagDocType = btn.dataset.docType;
+    document.getElementById('flagDocLabel').textContent = btn.dataset.docLabel;
+    document.getElementById('flagReason').textContent = btn.dataset.reason;
+    document.getElementById('flagEmail').textContent = btn.dataset.email;
+    document.getElementById('flagMessage').value = '';
+    document.getElementById('flagStatus').classList.add('hidden');
+    document.getElementById('flagSendBtn').disabled = false;
+
+    // Set default deadline to 3 days from now
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    document.getElementById('flagDeadline').value = d.toISOString().split('T')[0];
+    document.getElementById('flagDeadline').min = new Date().toISOString().split('T')[0];
+
+    const modal = document.getElementById('flagModal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeFlagModal() {
+    document.getElementById('flagModal').classList.add('hidden');
+    document.getElementById('flagModal').classList.remove('flex');
+    flagSubmissionId = null;
+    flagDocType = null;
+}
+
+async function sendFlagNotification() {
+    const btn = document.getElementById('flagSendBtn');
+    const statusEl = document.getElementById('flagStatus');
+    const deadline = document.getElementById('flagDeadline').value;
+    const message = document.getElementById('flagMessage').value.trim();
+
+    if (!deadline) {
+        statusEl.textContent = 'Please set a deadline.';
+        statusEl.className = 'text-sm p-3 rounded-lg bg-red-50 text-red-700';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+
+    try {
+        const resp = await fetch(`/admin/submission/${flagSubmissionId}/flag-notify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+            body: JSON.stringify({
+                doc_type: flagDocType,
+                admin_message: message,
+                deadline: deadline
+            })
+        });
+        const data = await resp.json();
+
+        if (data.status === 'success') {
+            statusEl.className = 'text-sm p-3 rounded-lg bg-green-50 text-green-700';
+            statusEl.textContent = data.message;
+            statusEl.classList.remove('hidden');
+            setTimeout(() => { closeFlagModal(); location.reload(); }, 1500);
+        } else {
+            statusEl.className = 'text-sm p-3 rounded-lg bg-red-50 text-red-700';
+            statusEl.textContent = data.message || 'Failed to send notification';
+            statusEl.classList.remove('hidden');
+            btn.disabled = false;
+            btn.textContent = 'Send Notification';
+        }
+    } catch (err) {
+        statusEl.className = 'text-sm p-3 rounded-lg bg-red-50 text-red-700';
+        statusEl.textContent = 'Network error. Please try again.';
+        statusEl.classList.remove('hidden');
+        btn.disabled = false;
+        btn.textContent = 'Send Notification';
+    }
+}
+
+// ============================
+// Bulk select & notify
+// ============================
+function toggleSelectAll(checkbox) {
+    document.querySelectorAll('.bulk-check').forEach(cb => { cb.checked = checkbox.checked; });
+    updateBulkCount();
+}
+
+function updateBulkCount() {
+    const checked = document.querySelectorAll('.bulk-check:checked');
+    const count = checked.length;
+    const btn = document.getElementById('bulkNotifyBtn');
+    const countEl = document.getElementById('bulkCount');
+    if (btn) {
+        countEl.textContent = count;
+        btn.classList.toggle('hidden', count === 0);
+    }
+}
+
+function openBulkFlagModal() {
+    const count = document.querySelectorAll('.bulk-check:checked').length;
+    document.getElementById('bulkSelectedCount').textContent = count;
+    document.getElementById('bulkMessage').value = '';
+    document.getElementById('bulkStatus').classList.add('hidden');
+    document.getElementById('bulkSendBtn').disabled = false;
+
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    document.getElementById('bulkDeadline').value = d.toISOString().split('T')[0];
+    document.getElementById('bulkDeadline').min = new Date().toISOString().split('T')[0];
+
+    const modal = document.getElementById('bulkFlagModal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+}
+
+function closeBulkFlagModal() {
+    document.getElementById('bulkFlagModal').classList.add('hidden');
+    document.getElementById('bulkFlagModal').classList.remove('flex');
+}
+
+async function sendBulkFlagNotification() {
+    const btn = document.getElementById('bulkSendBtn');
+    const statusEl = document.getElementById('bulkStatus');
+    const deadline = document.getElementById('bulkDeadline').value;
+    const message = document.getElementById('bulkMessage').value.trim();
+
+    if (!deadline) {
+        statusEl.textContent = 'Please set a deadline.';
+        statusEl.className = 'text-sm p-3 rounded-lg bg-red-50 text-red-700';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    // Collect all checked submissions and their rejected doc types
+    const items = [];
+    document.querySelectorAll('.bulk-check:checked').forEach(cb => {
+        const subId = parseInt(cb.dataset.submissionId);
+        const row = cb.closest('tr');
+        // Find rejected docs in this row (look for flag-notify buttons)
+        row.querySelectorAll('.flag-notify-btn').forEach(flagBtn => {
+            items.push({
+                submission_id: subId,
+                doc_type: flagBtn.dataset.docType
+            });
+        });
+    });
+
+    if (items.length === 0) {
+        statusEl.textContent = 'No rejected documents found in selected submissions.';
+        statusEl.className = 'text-sm p-3 rounded-lg bg-yellow-50 text-yellow-700';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+
+    try {
+        const resp = await fetch('/admin/submissions/bulk-flag-notify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF_TOKEN },
+            body: JSON.stringify({ items, admin_message: message, deadline })
+        });
+        const data = await resp.json();
+
+        if (data.status === 'success') {
+            statusEl.className = 'text-sm p-3 rounded-lg bg-green-50 text-green-700';
+            statusEl.textContent = `Sent: ${data.sent}, Failed: ${data.failed}`;
+            statusEl.classList.remove('hidden');
+            setTimeout(() => { closeBulkFlagModal(); location.reload(); }, 1500);
+        } else {
+            statusEl.className = 'text-sm p-3 rounded-lg bg-red-50 text-red-700';
+            statusEl.textContent = data.message || 'Failed';
+            statusEl.classList.remove('hidden');
+            btn.disabled = false;
+            btn.textContent = 'Send All Notifications';
+        }
+    } catch (err) {
+        statusEl.className = 'text-sm p-3 rounded-lg bg-red-50 text-red-700';
+        statusEl.textContent = 'Network error.';
+        statusEl.classList.remove('hidden');
+        btn.disabled = false;
+        btn.textContent = 'Send All Notifications';
+    }
+}
+
+// ============================
+// Notification History (audit trail)
+// ============================
+async function loadNotificationHistory(submissionId) {
+    const container = document.getElementById('notif-history-' + submissionId);
+    container.classList.remove('hidden');
+    container.innerHTML = '<p class="text-xs text-gray-400">Loading...</p>';
+
+    try {
+        const resp = await fetch(`/admin/submission/${submissionId}/notifications`);
+        const data = await resp.json();
+
+        if (!data.notifications || data.notifications.length === 0) {
+            container.innerHTML = '<p class="text-xs text-gray-400">No notifications sent for this submission.</p>';
+            return;
+        }
+
+        let html = '<div class="space-y-2">';
+        data.notifications.forEach(n => {
+            const statusColor = n.email_status === 'sent' ? 'green' : n.email_status === 'failed' ? 'red' : 'yellow';
+            const usedBadge = n.token_used ? '<span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-xs">Re-uploaded</span>' : '';
+            html += `
+                <div class="bg-white border rounded p-2 text-xs">
+                    <div class="flex items-center gap-2">
+                        <span class="font-medium">${n.doc_type}</span>
+                        <span class="px-1.5 py-0.5 rounded bg-${statusColor}-100 text-${statusColor}-700">${n.email_status}</span>
+                        ${usedBadge}
+                        <span class="text-gray-400 ml-auto">${n.created_at ? n.created_at.substring(0, 16) : ''}</span>
+                    </div>
+                    <p class="text-gray-500 mt-1">By: ${n.created_by_username || 'Unknown'} | Deadline: ${n.deadline || 'N/A'}</p>
+                    ${n.admin_message ? `<p class="text-gray-600 mt-1">"${n.admin_message}"</p>` : ''}
+                </div>`;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+    } catch (err) {
+        container.innerHTML = '<p class="text-xs text-red-500">Failed to load history.</p>';
+    }
+}
 </script>
 {% endblock %}

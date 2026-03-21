@@ -23,6 +23,7 @@ COPY validation_engine.py .
 COPY celebrity_detection.py .
 COPY model_manager.py .
 COPY storage.py .
+COPY email_service.py .
 
 # Templates and static files
 COPY templates/ ./templates/

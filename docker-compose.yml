@@ -10,8 +10,17 @@ services:
       - ADMIN_PASSWORD=admin
       - SECRET_KEY=dev-secret-change-this
       - DATA_DIR=/app/data
-      # Set your OpenAI API key in a .env file (never commit secrets!)
+      # Set secrets in a .env file (never commit secrets!)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # SMTP config for email notifications (set in .env file)
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-noreply@lbsnaa.gov.in}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-LBSNAA Form Builder}
+      - BASE_URL=${BASE_URL:-http://localhost:5000}
     volumes:
       - lbsnaa-data:/app/data
       - lbsnaa-temp:/app/temp_uploads

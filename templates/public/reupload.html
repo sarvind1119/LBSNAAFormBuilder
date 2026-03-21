@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Re-upload Document - {{ notif.course_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-xl mx-auto">
+    <!-- Header -->
+    <div class="text-center mb-8">
+        <h1 class="text-2xl font-bold text-gray-900">{{ notif.course_name }}</h1>
+        <p class="text-gray-500 mt-1">Document Re-upload</p>
+    </div>
+
+    <!-- Success Screen (hidden by default) -->
+    <div id="successScreen" class="hidden bg-white rounded-xl shadow-sm border p-8 text-center">
+        <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+        </div>
+        <h2 class="text-xl font-semibold text-gray-900 mb-2">Document Re-uploaded Successfully</h2>
+        <p id="successMessage" class="text-gray-600"></p>
+        <p class="text-gray-400 text-sm mt-4">You can close this page now.</p>
+    </div>
+
+    <!-- Info Card -->
+    <div id="mainContent">
+        <div class="bg-white rounded-xl shadow-sm border p-6 mb-6">
+            <h2 class="text-lg font-semibold text-red-600 mb-4">Document Re-upload Required</h2>
+
+            <div class="space-y-3 text-sm">
+                <div class="flex">
+                    <span class="text-gray-500 w-32 shrink-0">Submission ID</span>
+                    <span class="text-gray-900 font-medium">#{{ notif.submission_id }}</span>
+                </div>
+                <div class="flex">
+                    <span class="text-gray-500 w-32 shrink-0">Document</span>
+                    <span class="text-gray-900 font-medium">{{ doc_label }}</span>
+                </div>
+                <div class="flex">
+                    <span class="text-gray-500 w-32 shrink-0">Reason</span>
+                    <span class="text-red-600">{{ notif.reason }}</span>
+                </div>
+                {% if notif.admin_message %}
+                <div class="bg-green-50 border-l-4 border-green-500 p-3 rounded">
+                    <p class="text-sm font-medium text-gray-700 mb-1">Message from Admin:</p>
+                    <p class="text-sm text-gray-600">{{ notif.admin_message }}</p>
+                </div>
+                {% endif %}
+                <div class="flex">
+                    <span class="text-gray-500 w-32 shrink-0">Deadline</span>
+                    <span class="text-red-600 font-medium">{{ notif.deadline }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload Zone -->
+        <div class="bg-white rounded-xl shadow-sm border p-6">
+            <h3 class="text-base font-semibold text-gray-800 mb-4">Upload Corrected {{ doc_label }}</h3>
+
+            <div id="dropZone"
+                 class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-primary-400 transition cursor-pointer"
+                 onclick="document.getElementById('fileInput').click()">
+                <input type="file" id="fileInput" class="hidden" accept=".jpg,.jpeg,.png,.pdf">
+                <div id="uploadPrompt">
+                    <svg class="w-12 h-12 text-gray-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                    </svg>
+                    <p class="text-gray-500 text-sm">Click to browse or drag & drop</p>
+                    <p class="text-gray-400 text-xs mt-1">JPG, PNG, or PDF (max 5MB)</p>
+                </div>
+                <div id="uploadLoading" class="hidden">
+                    <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600 mx-auto mb-3"></div>
+                    <p class="text-gray-500 text-sm">Validating document...</p>
+                </div>
+            </div>
+
+            <!-- Validation Result -->
+            <div id="validationResult" class="hidden mt-4 p-4 rounded-lg"></div>
+
+            <!-- Error display -->
+            <div id="uploadError" class="hidden mt-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const REUPLOAD_TOKEN = '{{ token }}';
+    const DOC_TYPE = '{{ notif.doc_type }}';
+    const DOC_LABEL = '{{ doc_label }}';
+</script>
+<script src="{{ url_for('static', filename='reupload.js') }}"></script>
+{% endblock %}

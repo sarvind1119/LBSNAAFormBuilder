@@ -28,6 +28,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from model_manager import ModelManager
 from validation_engine import validate_document
 from storage import get_storage
+import secrets
 from database import (
     init_db, get_default_fields_config, get_default_doc_config,
     create_course, get_all_courses, get_course_by_id, get_course_by_slug,
@@ -35,8 +36,12 @@ from database import (
     save_submission, get_submissions_by_course, get_submission_count,
     delete_submission, update_submission_files, get_submission_by_id,
     get_user_by_username, get_user_by_id, get_all_users,
-    create_user, update_user_role, update_user_password, delete_user
+    create_user, update_user_role, update_user_password, delete_user,
+    create_notification, get_notification_by_token, mark_notification_sent,
+    mark_notification_failed, mark_token_used, get_notifications_for_submission,
+    get_notifications_for_course, save_reupload_log, update_submission_doc
 )
+from email_service import send_notification_email, is_configured as smtp_configured
 
 # Configure logging
 logging.basicConfig(
@@ -455,11 +460,22 @@ def admin_submissions(course_id):
         if dc.get('enabled'):
             enabled_docs.append({"type": doc_type, "label": dc.get("label", doc_type)})
 
+    # Build notification map for badge display
+    all_notifs = get_notifications_for_course(course_id)
+    notification_map = {}
+    for n in all_notifs:
+        sid = n['submission_id']
+        if sid not in notification_map:
+            notification_map[sid] = []
+        notification_map[sid].append(n)
+
     return render_template('admin/submissions.html',
                            course=course,
                            submissions=submissions,
                            enabled_fields=enabled_fields,
-                           enabled_docs=enabled_docs)
+                           enabled_docs=enabled_docs,
+                           notification_map=notification_map,
+                           smtp_configured=smtp_configured())
 
 
 @app.route('/admin/submission/<int:submission_id>/delete', methods=['POST'])
@@ -511,6 +527,314 @@ def admin_download_file(submission_id, doc_type):
         as_attachment=download,
         download_name=Path(file_key).name if download else None
     )
+
+
+# ============================================================================
+# NOTIFICATION & FLAG SYSTEM
+# ============================================================================
+
+@app.route('/admin/submission/<int:submission_id>/flag-notify', methods=['POST'])
+@require_admin
+def admin_flag_notify(submission_id):
+    """Admin flags a document and sends re-upload notification email."""
+    sub = get_submission_by_id(submission_id)
+    if not sub:
+        return jsonify({'status': 'error', 'message': 'Submission not found'}), 404
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data received'}), 400
+
+    doc_type = data.get('doc_type', '').upper()
+    if doc_type not in VALID_DOC_TYPES:
+        return jsonify({'status': 'error', 'message': 'Invalid document type'}), 400
+
+    admin_message = data.get('admin_message', '').strip()
+    deadline = data.get('deadline', '').strip()
+    if not deadline:
+        return jsonify({'status': 'error', 'message': 'Deadline is required'}), 400
+
+    # Get reason from the stored validation result
+    result_key = f'{doc_type.lower()}_result'
+    result = sub.get(result_key) or {}
+    reason = result.get('message', 'Document was flagged by admin')
+
+    # Get course info for email
+    from database import get_course_by_id as _get_course
+    course = _get_course(sub['course_id'])
+    if not course:
+        return jsonify({'status': 'error', 'message': 'Course not found'}), 404
+
+    doc_config = course.get('doc_config', {})
+    doc_label = doc_config.get(doc_type, {}).get('label', doc_type)
+
+    # Generate secure token
+    token = secrets.token_urlsafe(48)
+
+    # Create notification record
+    notif_id = create_notification(
+        submission_id=submission_id,
+        doc_type=doc_type,
+        reason=reason,
+        admin_message=admin_message,
+        deadline=deadline,
+        token=token,
+        created_by=session['user_id']
+    )
+
+    # Send email
+    participant_email = sub.get('email') or sub.get('form_data', {}).get('email', '')
+    if not participant_email:
+        mark_notification_failed(notif_id)
+        return jsonify({'status': 'error', 'message': 'No email address found for this submission'}), 400
+
+    base_url = os.environ.get('BASE_URL', request.host_url.rstrip('/'))
+    reupload_url = f"{base_url}/reupload/{token}"
+
+    if not smtp_configured():
+        mark_notification_failed(notif_id)
+        return jsonify({
+            'status': 'error',
+            'message': 'SMTP not configured. Set SMTP_HOST environment variable.',
+            'notification_id': notif_id
+        }), 500
+
+    try:
+        send_notification_email(
+            to_email=participant_email,
+            course_name=course['name'],
+            submission_id=submission_id,
+            doc_label=doc_label,
+            reason=reason,
+            admin_message=admin_message,
+            deadline=deadline,
+            reupload_url=reupload_url
+        )
+        mark_notification_sent(notif_id)
+        return jsonify({
+            'status': 'success',
+            'message': f'Notification sent to {participant_email}',
+            'notification_id': notif_id
+        })
+    except Exception as e:
+        logger.error(f"Failed to send notification email: {e}", exc_info=True)
+        mark_notification_failed(notif_id)
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to send email: {str(e)}',
+            'notification_id': notif_id
+        }), 500
+
+
+@app.route('/admin/submissions/bulk-flag-notify', methods=['POST'])
+@require_admin
+def admin_bulk_flag_notify():
+    """Bulk flag & notify multiple submissions."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data received'}), 400
+
+    items = data.get('items', [])
+    admin_message = data.get('admin_message', '').strip()
+    deadline = data.get('deadline', '').strip()
+
+    if not items or not deadline:
+        return jsonify({'status': 'error', 'message': 'Items and deadline are required'}), 400
+
+    if not smtp_configured():
+        return jsonify({'status': 'error', 'message': 'SMTP not configured'}), 500
+
+    base_url = os.environ.get('BASE_URL', request.host_url.rstrip('/'))
+    sent = 0
+    failed = 0
+    results = []
+
+    for item in items:
+        sub_id = item.get('submission_id')
+        doc_type = item.get('doc_type', '').upper()
+
+        sub = get_submission_by_id(sub_id)
+        if not sub or doc_type not in VALID_DOC_TYPES:
+            failed += 1
+            results.append({'submission_id': sub_id, 'status': 'error', 'message': 'Invalid submission or doc type'})
+            continue
+
+        course = get_course_by_id(sub['course_id'])
+        if not course:
+            failed += 1
+            continue
+
+        result_data = sub.get(f'{doc_type.lower()}_result') or {}
+        reason = result_data.get('message', 'Document was flagged by admin')
+        doc_label = course.get('doc_config', {}).get(doc_type, {}).get('label', doc_type)
+        participant_email = sub.get('email') or sub.get('form_data', {}).get('email', '')
+
+        token = secrets.token_urlsafe(48)
+        notif_id = create_notification(
+            submission_id=sub_id, doc_type=doc_type, reason=reason,
+            admin_message=admin_message, deadline=deadline, token=token,
+            created_by=session['user_id']
+        )
+
+        if not participant_email:
+            mark_notification_failed(notif_id)
+            failed += 1
+            continue
+
+        try:
+            reupload_url = f"{base_url}/reupload/{token}"
+            send_notification_email(
+                to_email=participant_email, course_name=course['name'],
+                submission_id=sub_id, doc_label=doc_label, reason=reason,
+                admin_message=admin_message, deadline=deadline, reupload_url=reupload_url
+            )
+            mark_notification_sent(notif_id)
+            sent += 1
+            results.append({'submission_id': sub_id, 'status': 'success'})
+        except Exception as e:
+            logger.error(f"Bulk notify failed for submission {sub_id}: {e}")
+            mark_notification_failed(notif_id)
+            failed += 1
+            results.append({'submission_id': sub_id, 'status': 'error', 'message': str(e)})
+
+    return jsonify({'status': 'success', 'sent': sent, 'failed': failed, 'results': results})
+
+
+@app.route('/admin/submission/<int:submission_id>/notifications')
+@require_login
+def admin_submission_notifications(submission_id):
+    """Return notification history for a submission (audit trail)."""
+    notifications = get_notifications_for_submission(submission_id)
+    return jsonify({'status': 'success', 'notifications': notifications})
+
+
+# ============================================================================
+# PUBLIC RE-UPLOAD
+# ============================================================================
+
+@app.route('/reupload/<token>')
+def reupload_page(token):
+    """Public re-upload page for participants."""
+    notif = get_notification_by_token(token)
+    if not notif:
+        return render_template('public/reupload_error.html',
+                               message="Invalid re-upload link."), 404
+
+    if notif['token_used']:
+        return render_template('public/reupload_error.html',
+                               message="This re-upload link has already been used."), 410
+
+    # Check deadline
+    try:
+        deadline_dt = datetime.fromisoformat(notif['deadline'])
+        if datetime.utcnow() > deadline_dt:
+            return render_template('public/reupload_error.html',
+                                   message=f"This re-upload link expired on {notif['deadline']}."), 410
+    except (ValueError, TypeError):
+        pass  # If deadline isn't parseable as datetime, skip expiry check
+
+    doc_label = notif.get('doc_config', {}).get(notif['doc_type'], {}).get('label', notif['doc_type'])
+
+    return render_template('public/reupload.html',
+                           notif=notif,
+                           doc_label=doc_label,
+                           token=token)
+
+
+@csrf.exempt
+@app.route('/api/reupload/<token>', methods=['POST'])
+@limiter.limit("10 per minute")
+@require_models
+def reupload_document(token):
+    """Process a re-uploaded document."""
+    notif = get_notification_by_token(token)
+    if not notif:
+        return jsonify({'status': 'error', 'message': 'Invalid token'}), 404
+
+    if notif['token_used']:
+        return jsonify({'status': 'error', 'message': 'This link has already been used'}), 410
+
+    try:
+        deadline_dt = datetime.fromisoformat(notif['deadline'])
+        if datetime.utcnow() > deadline_dt:
+            return jsonify({'status': 'error', 'message': 'This link has expired'}), 410
+    except (ValueError, TypeError):
+        pass
+
+    if 'file' not in request.files:
+        return jsonify({'status': 'error', 'message': 'No file provided'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'status': 'error', 'message': 'No file selected'}), 400
+    if not allowed_file(file.filename):
+        return jsonify({'status': 'error', 'message': 'File type not allowed'}), 400
+
+    doc_type = notif['doc_type']
+    user_name = notif.get('form_data', {}).get('name', '')
+
+    temp_filepath = save_temp_file(file)
+    if not temp_filepath:
+        return jsonify({'status': 'error', 'message': 'Failed to save file'}), 500
+
+    try:
+        # Validate through ML pipeline
+        ml_model = ModelManager.get_ml_model()
+        outlier_model = ModelManager.get_outlier_model()
+        result = validate_document(
+            image_path=temp_filepath,
+            expected_type=doc_type,
+            ml_model=ml_model,
+            outlier_model=outlier_model,
+            user_name=user_name
+        )
+
+        # Save file permanently (replace old one)
+        storage = get_storage()
+        new_file_key = storage.replace_file(
+            notif['course_slug'], notif['submission_id'], doc_type, temp_filepath
+        )
+
+        # Update submission with new validation results
+        update_submission_doc(
+            submission_id=notif['submission_id'],
+            doc_type=doc_type,
+            valid=result['is_valid'],
+            result=result,
+            file_key=new_file_key
+        )
+
+        # Log the re-upload
+        save_reupload_log(
+            notification_id=notif['id'],
+            submission_id=notif['submission_id'],
+            doc_type=doc_type,
+            new_valid=1 if result['is_valid'] else 0,
+            new_result=result,
+            new_file=new_file_key
+        )
+
+        # Mark token as used
+        mark_token_used(notif['id'])
+
+        return jsonify({
+            'status': 'success',
+            'validation': {
+                'is_valid': result['is_valid'],
+                'expected_type': result['expected_type'],
+                'actual_type': result['actual_type'],
+                'confidence': result['confidence'],
+                'result': result['result'],
+                'message': result['message'],
+                'name_match': result.get('name_match', {}),
+                'celebrity_warning': result.get('celebrity_warning', None)
+            }
+        })
+    except Exception as e:
+        logger.error(f"Re-upload validation error: {e}", exc_info=True)
+        return jsonify({'status': 'error', 'message': 'Validation failed'}), 500
+    finally:
+        cleanup_file(temp_filepath)
 
 
 # ============================================================================
