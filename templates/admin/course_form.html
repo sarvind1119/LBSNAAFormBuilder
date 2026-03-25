@@ -57,6 +57,8 @@
                     <input type="hidden" name="field_type_{{ field.key }}" value="{{ field.type }}">
                     {% if field.type == 'select' %}
                     <input type="hidden" name="field_options_{{ field.key }}" value="{{ field.get('options', [])|join(', ') }}">
+                    {% elif field.type == 'grouped_select' %}
+                    <input type="hidden" name="field_options_{{ field.key }}" value="grouped">
                     {% endif %}
 
                     <!-- Enabled checkbox -->
@@ -88,7 +90,7 @@
                         {% endif %}
                     </label>
 
-                    <span class="text-xs text-gray-400 ml-auto">{{ field.type }}</span>
+                    <span class="text-xs text-gray-400 ml-auto">{{ 'dropdown (grouped)' if field.type == 'grouped_select' else field.type }}</span>
                 </div>
                 {% endfor %}
             </div>

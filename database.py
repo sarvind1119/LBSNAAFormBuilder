@@ -145,6 +145,63 @@ def init_db():
 # DEFAULT CONFIGS
 # ============================================================================
 
+SERVICES_LIST = [
+    "Indian Administrative Service (IAS)",
+    "Indian Police Service (IPS)",
+    "Indian Forest Service (IFoS)",
+    "Indian Foreign Service (IFS)",
+    "Indian Audit and Accounts Service (IA&AS)",
+    "Indian Civil Accounts Service (ICAS)",
+    "Indian Corporate Law Service (ICLS)",
+    "Indian Defence Accounts Service (IDAS)",
+    "Indian Defence Estates Service (IDES)",
+    "Indian Information Service (IIS)",
+    "Indian Ordnance Factories Service (IOFS)",
+    "Indian Communication Finance Services (ICFS)",
+    "Indian Postal Service (IPoS)",
+    "Indian Railway Accounts Service (IRAS)",
+    "Indian Railway Personnel Service (IRPS)",
+    "Indian Railway Traffic Service (IRTS)",
+    "Indian Revenue Service (IRS-IT)",
+    "Indian Revenue Service (IRS-C&CE)",
+    "Others",
+]
+
+STATES_AND_UT = {
+    "States": [
+        "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh",
+        "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand",
+        "Karnataka", "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur",
+        "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Punjab",
+        "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana", "Tripura",
+        "Uttar Pradesh", "Uttarakhand", "West Bengal",
+    ],
+    "Union Territories": [
+        "Andaman and Nicobar Islands", "Chandigarh",
+        "Dadra and Nagar Haveli and Daman and Diu", "Delhi (NCT)",
+        "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry",
+    ],
+}
+
+CADRE_LIST = [
+    "AGMUT", "Andhra Pradesh", "Assam-Meghalaya", "Bihar", "Chhattisgarh",
+    "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka",
+    "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Nagaland",
+    "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu",
+    "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal",
+]
+
+ZONE_LIST = {
+    "Zone-I": "AGMUT, J&K, HP, Uttarakhand, Punjab, Rajasthan, Haryana",
+    "Zone-II": "UP, Bihar, Jharkhand, Odisha",
+    "Zone-III": "Gujarat, Maharashtra, MP, Chhattisgarh",
+    "Zone-IV": "WB, Sikkim, Assam-Meghalaya, Manipur, Tripura, Nagaland",
+    "Zone-V": "Telangana, AP, Karnataka, Kerala, TN, Goa",
+}
+
+# Flatten states for simple select; grouped version used in template
+STATES_FLAT = STATES_AND_UT["States"] + STATES_AND_UT["Union Territories"]
+
 DEFAULT_FIELDS_CONFIG = {
     "default_fields": [
         {"key": "name", "label": "Full Name", "type": "text", "enabled": True, "required": True, "locked": True},
@@ -152,11 +209,11 @@ DEFAULT_FIELDS_CONFIG = {
         {"key": "i_nomination", "label": "iNomination Number", "type": "text", "enabled": True, "required": True},
         {"key": "gender", "label": "Gender", "type": "select", "enabled": True, "required": True, "options": ["Male", "Female", "Other"]},
         {"key": "job_title", "label": "Job Title", "type": "text", "enabled": True, "required": False},
-        {"key": "service", "label": "Service", "type": "text", "enabled": True, "required": True},
+        {"key": "service", "label": "Service", "type": "select", "enabled": True, "required": True, "options": SERVICES_LIST},
         {"key": "batch", "label": "Batch", "type": "text", "enabled": True, "required": True},
-        {"key": "cadre", "label": "Cadre", "type": "text", "enabled": True, "required": True},
-        {"key": "zone", "label": "Zone", "type": "text", "enabled": True, "required": False},
-        {"key": "state", "label": "State", "type": "text", "enabled": True, "required": False},
+        {"key": "cadre", "label": "Cadre", "type": "select", "enabled": True, "required": True, "options": CADRE_LIST},
+        {"key": "zone", "label": "Zone", "type": "select", "enabled": True, "required": False, "options": list(ZONE_LIST.keys())},
+        {"key": "state", "label": "State", "type": "grouped_select", "enabled": True, "required": False, "option_groups": STATES_AND_UT},
         {"key": "department", "label": "Department", "type": "text", "enabled": True, "required": False},
         {"key": "mobile", "label": "Mobile", "type": "tel", "enabled": True, "required": True},
     ],

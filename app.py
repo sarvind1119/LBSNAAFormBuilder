@@ -354,6 +354,11 @@ def _save_course(is_new, course_id=None):
     fields_config = {"default_fields": [], "custom_fields": []}
     default_keys = request.form.getlist('default_field_keys')
 
+    # Build lookup of default field definitions to preserve options/option_groups
+    default_field_lookup = {}
+    for f in get_default_fields_config()["default_fields"]:
+        default_field_lookup[f["key"]] = f
+
     for key in default_keys:
         label = request.form.get(f'field_label_{key}', key)
         ftype = request.form.get(f'field_type_{key}', 'text')
@@ -370,8 +375,21 @@ def _save_course(is_new, course_id=None):
         field = {"key": key, "label": label, "type": ftype, "enabled": enabled, "required": required}
         if locked:
             field["locked"] = True
-        if options:
+
+        # For default fields, preserve predefined options/option_groups from defaults
+        default_def = default_field_lookup.get(key)
+        if default_def:
+            if "option_groups" in default_def:
+                field["type"] = default_def["type"]
+                field["option_groups"] = default_def["option_groups"]
+            elif "options" in default_def and default_def["type"] in ("select", "grouped_select"):
+                field["options"] = default_def["options"]
+                field["type"] = default_def["type"]
+            elif options:
+                field["options"] = options
+        elif options:
             field["options"] = options
+
         fields_config["default_fields"].append(field)
 
     # Custom fields — iterate by index

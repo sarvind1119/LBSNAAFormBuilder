@@ -48,7 +48,20 @@
                     <label class="block text-sm font-medium text-gray-700 mb-1">
                         {{ field.label }}{% if field.required %} <span class="text-red-500">*</span>{% endif %}
                     </label>
-                    {% if field.type == 'select' %}
+                    {% if field.type == 'grouped_select' %}
+                        <select name="{{ field.key }}" data-field="{{ field.key }}"
+                                {% if field.required %}required{% endif %}
+                                class="form-field w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
+                            <option value="">Select...</option>
+                            {% for group_name, group_options in field.get('option_groups', {}).items() %}
+                                <optgroup label="{{ group_name }}">
+                                    {% for opt in group_options %}
+                                        <option value="{{ opt }}">{{ opt }}</option>
+                                    {% endfor %}
+                                </optgroup>
+                            {% endfor %}
+                        </select>
+                    {% elif field.type == 'select' %}
                         <select name="{{ field.key }}" data-field="{{ field.key }}"
                                 {% if field.required %}required{% endif %}
                                 class="form-field w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent-500 focus:border-accent-500 outline-none">
